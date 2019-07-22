@@ -1,0 +1,115 @@
+--爆款秒杀退款销售明细数据(未限制退款时间)
+select  s0.product_cname1 as product_cname1,
+		s0.product_cname2 as product_cname2,
+		s0.product_cname3 as product_cname3,
+		s0.shop_id as shop_id,
+		s0.shop_title as shop_title,
+		s0.product_id as product_id,  --商品spu_id
+		s0.product_sku_id as product_sku_id,  --商品skuId
+		s0.product_title as product_title,--商品名称
+		if(s3.order_sn is null,'未发货','已发货'),
+		if(s4.order_sn is null,'未签收','已签收'),
+		sum(s0.sale_num) as sale_num,  --销售数量
+		sum(s0.pay_money) as sale_money, --销售金额
+		sum(if(s2.success_price is null,0,s2.success_price)) as refund_money,  --退款金额
+		sum((case when refund_status=2 then if(s0.product_price=0,0,ceil(s2.success_price/s0.product_price)) when refund_status=1 then s2.refund_count  else 0 end)) as refund_num, --退款数量
+		'${begin_date}-${end_date}' as report_date
+		from
+		(--获取楚楚推平台所有订单的行业信息等
+		select 	DISTINCT
+				a.product_id,  --第三方业务系统售卖商品标识
+				a.product_sku_id,  --商品skuId
+				a.sale_num,  --售卖数量
+				a.third_tradeno,  --第三方业务平台交易编码即订单号
+				a.item_price/100  as pay_money, --交易价格
+				a.item_price/(100*a.sale_num) as product_price,--单品单价
+				c.product_title,
+				c.shop_id,
+				c.shop_title,
+				c.product_cname1,
+				c.product_cname2,
+				c.product_cname3
+				from
+				origin_common.cc_ods_dwxk_wk_sales_deal_ctime a
+				left join--仅取楚楚推用户订单
+				origin_common.cc_ods_dwxk_fs_wk_cck_user b
+				ON
+				a.cck_uid =b.cck_uid 
+				left join--匹配单品行业及单品名称，店铺名称、ID
+				data.cc_dw_fs_products_shops c
+				ON
+				a.product_id=c.product_id
+				where 
+				a.ds>='${begin_date}'
+				and
+				a.ds<='${end_date}'
+				AND
+				b.ds='${end_date}'
+				AND
+				b.platform=14
+				AND
+				a.product_id in (${spuids})
+		)s0
+		left join
+		(--单品退款情况
+		select 	DISTINCT
+				e.order_sn,  --订单号
+				e.refund_sn,  --退款单号
+				if(e.status=2,if(e.success_price>0,2,0),e.status) as refund_status, --退款状态（0 退款中,1 退款成功,2 部分退款,0 拒绝退款）
+				e.success_price,  --退款金额
+				f.product_id,  --SPU_ID
+				f.sku_id,  --sku_id
+				f.refund_count --退款数量
+				FROM
+				origin_common.cc_ods_fs_refund_order e
+				left join
+				origin_common.cc_refund_products f
+				ON
+				e.refund_sn=f.refund_sn
+				where
+				f.ds=from_unixtime(unix_timestamp()-3600*24,'yyyyMMdd')--永远取昨日数据
+				AND
+				CONCAT('20',substr(e.order_sn,1,6))+0>='${begin_date}'
+				AND
+				CONCAT('20',substr(e.order_sn,1,6))+0<='${end_date}'
+				AND
+				CONCAT('20',substr(f.order_sn,1,6))+0>='${begin_date}'
+				AND
+				CONCAT('20',substr(f.order_sn,1,6))+0<='${end_date}'		
+				AND
+				if(e.status=2,if(e.success_price>0,2,0),e.status) >0
+				AND
+				f.product_id in (${spuids})
+		)s2
+		ON
+		s0.third_tradeno=s2.order_sn
+		AND
+		s0.product_id=s2.product_id
+		AND
+		s0.product_sku_id=s2.sku_id
+		left join
+		(
+		select order_sn 
+				from origin_common.cc_order_user_delivery_time 
+				where 
+				CONCAT('20',substr(order_sn,1,6))+0>='${begin_date}'
+				AND
+				CONCAT('20',substr(order_sn,1,6))+0<='${end_date}'
+		) s3
+		ON
+		s0.third_tradeno=s3.order_sn
+		left join
+		(
+		select  order_sn 
+				from 
+				origin_common.cc_order_user_receiving_time 
+				where 
+				CONCAT('20',substr(order_sn,1,6))+0>='${begin_date}'
+				AND
+				CONCAT('20',substr(order_sn,1,6))+0<='${end_date}'
+		) s4
+		ON
+		s0.third_tradeno=s4.order_sn
+		GROUP BY
+		s0.product_id,s0.product_sku_id,s0.shop_id,s0.shop_title,s0.product_title,s0.product_cname1,s0.product_cname2,s0.product_cname3,
+		if(s3.order_sn is null,'未发货','已发货'),if(s4.order_sn is null,'未签收','已签收')
